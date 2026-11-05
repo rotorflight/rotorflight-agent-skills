@@ -1,0 +1,17 @@
+{
+  "name": "rotorflight",
+  "owner": {
+    "name": "Rotorflight",
+    "url": "https://github.com/rotorflight"
+  },
+  "metadata": {
+    "description": "Agent skills for Rotorflight development: firmware toolchain, unit tests, SITL, J-Link debugging, blackbox decoding, EdgeTX and Ethos simulators, Ethos real radio."
+  },
+  "plugins": [
+    {
+      "name": "rotorflight-dev",
+      "source": "./",
+      "description": "Skills for building, testing and debugging Rotorflight firmware and Lua suites."
+    }
+  ]
+}

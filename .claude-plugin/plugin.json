@@ -1,0 +1,8 @@
+{
+  "name": "rotorflight-dev",
+  "version": "0.1.0",
+  "description": "Skills for building, testing and debugging Rotorflight firmware and Lua suites.",
+  "homepage": "https://github.com/rotorflight/rotorflight-agent-skills",
+  "repository": "https://github.com/rotorflight/rotorflight-agent-skills",
+  "license": "GPL-3.0-or-later"
+}
