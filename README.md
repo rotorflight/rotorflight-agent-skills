@@ -21,6 +21,7 @@ skills link to them instead of copying them.
 | [edgetx-simulator](skills/edgetx-simulator/SKILL.md) | Run the EdgeTX Lua suite in the EdgeTX simulator |
 | [ethos-simulator](skills/ethos-simulator/SKILL.md) | Run the Ethos Lua suite in the Ethos simulator |
 | [ethos-real-radio](skills/ethos-real-radio/SKILL.md) | Drive and debug a real Ethos radio over USB |
+| [fc-config-backup](skills/fc-config-backup/SKILL.md) | Back up and restore a flight controller's configuration over the CLI |
 
 ## Install
 
