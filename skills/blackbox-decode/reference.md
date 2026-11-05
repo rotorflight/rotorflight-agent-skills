@@ -58,10 +58,10 @@ Explorer's `flightlog_fielddefs.js` and `flightlog_fields_presenter.js`, and the
 | LOGGING_RESUME | 14 | a gap in the data starts here |
 | DISARM | 15 | `reason`, `label` |
 | FLIGHT_MODE | 30 | `flags`, `lastFlags`, `on`, `off` (mode names) |
-| GOVERNOR_STATE | 50 | `state`, `label` (THROTTLE_OFF, THROTTLE_IDLE, SPOOLUP, RECOVERY, ACTIVE, ...) |
+| GOVERNOR_STATE | 50 | `state`, `label` (see below) |
 | RESCUE_STATE | 51 | `state`, `label` |
 | AIRBORNE_STATE | 52 | `state`, `label` (TAKEOFF / LANDING) |
-| CUSTOM_DATA / CUSTOM_STRING | 100 / 101 | |
+| CUSTOM_DATA / CUSTOM_STRING | 100 / 101 | with `esc_sensor_protocol = RECORD`, raw ESC telemetry bytes (nothing decoded) |
 | LOG_END | 255 | time is `null` |
 
 A profile switch on a switch that changes both rate and PID profile shows as two events at the
@@ -70,12 +70,40 @@ same time. Adjustment function numbers are `ADJUSTMENT_*` in the firmware's
 
 An event's time is that of the next main frame (the loop iteration it happened in).
 
+### Governor states (`flight/governor.h`, 4.6)
+
+| # | State | Meaning |
+| --- | --- | --- |
+| 0 | THROTTLE_OFF | |
+| 1 | THROTTLE_IDLE | |
+| 2 | SPOOLUP | |
+| 3 | RECOVERY | fast re-spool out of FALLBACK or THROTTLE_HOLD; assumes the heli is airborne |
+| 4 | ACTIVE | governing |
+| 5 | THROTTLE_HOLD | |
+| 6 | FALLBACK | RPM signal lost; `gov_fallback_drop` lowers throttle on purpose to warn the pilot, so the headspeed sag is the alarm, not a fault |
+| 7 | AUTOROTATION | |
+| 8 | BAILOUT | autorotation abandoned, ramped at `gov_recovery_time` |
+| 9 | BYPASS | new in 4.6: no safeguards, no rate limiting |
+
+The CRSF flight-mode strings (`telemetry/crsf.c`) use different names for 0, 5 and 6; the numbers
+above are the authority.
+
 ## Telemetry sentinels
 
 ESCs that do not report a value often log a constant such as 25500 (255.00 A or V), 65535 or 255.
 `inventory.telemetry` in the `.json` classifies each telemetry column as `real`, `zero`,
 `sentinel` or `empty`. Only analyse `real` ones. `Vbec`/`Vbus` are the FC's own ADC; `BecV`/`BecI`
 come from the ESC.
+
+Known placeholders: BEC temperature is a constant 255 when the ESC has no such sensor; BEC, bus
+and MCU currents are usually exactly zero. `Tmcu` comes from the MCU's internal sensor through a
+1 Hz task and an 8-sample average, so it lags ~8 s, and below 30 degC it reads about 1 degC high.
+
+## Cell count
+
+`battery_cell_count` (0-24) is usually set by the user; the firmware only auto-detects while it
+is 0, and then takes the first matching voltage window, so overlapping windows can pick the wrong
+count (e.g. 33.0-34.4 V detects as 8S). Get the real count from the user or their `diff all`.
 
 ## Firmware versions
 

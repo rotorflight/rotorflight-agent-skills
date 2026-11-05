@@ -58,8 +58,23 @@ The `bin/` harnesses run with plain `lua5.3`, as in CI (`.github/workflows/`).
 `io.popen("ls")`, `mkdir -p` and `os.rename` behave differently, so a few harnesses need a shim
 or WSL; compare a failing harness against `master` before blaming your change.
 
+## SD card files
+
+- **`radio.yml` has a CRC** (a leading `checksum:` line) that EdgeTX verifies. On a mismatch it
+  renames the file to `radio.yml.error` and boots with default radio settings, which looks odd
+  rather than broken (switches and internal module gone). After a hand edit set
+  `manuallyEdited: 1` or recompute the CRC. Model files have no checksum.
+- **Models are adopted automatically:** a new `MODELS/modelN.yml` is picked up and added to
+  `labels.yml` on the next boot. If a `models.yml` exists in `MODELS/` or `RADIO/`, any model not
+  listed in it is moved to `MODELS/UNUSED` instead.
+- **Switch and pot names resolve against the target radio.** A name the radio does not have
+  becomes `none` without any warning, so a model copied between radio types can silently lose
+  mixes or switches. Use the `--radio` target the model was made for.
+- **Editing Lua on Windows:** do not use PowerShell 5.1 `Get-Content`/`Set-Content` (they
+  mis-read UTF-8 without BOM and write a BOM). Check syntax with Lua 5.3, the radio's version;
+  `luac` 5.4 rejects valid 5.3 code.
+
 ## Afterwards
 
-The simulator writes to `simulator/MODELS` and `simulator/RADIO` (and `radio.yml` carries a
-checksum: set `manuallyEdited: 1` if you edit it by hand). Restore them with
+The simulator writes to `simulator/MODELS` and `simulator/RADIO`. Restore them with
 `git checkout -- simulator/MODELS simulator/RADIO` before committing.

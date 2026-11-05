@@ -197,8 +197,8 @@ function openFile(ctx, file) {
 
 // Every "H key:value" line of log i as written by the firmware. The parser renames or drops
 // some (field definitions, settings it does not know), so keep the original as well.
-function rawHeader(buf, i) {
-    const marker = Buffer.from('H Product:Blackbox flight data recorder by Nicholas Sherlock\n', 'latin1');
+function rawHeader(ctx, buf, i) {
+    const marker = Buffer.from(vm.runInContext('FlightLogParser.prototype.FLIGHT_LOG_START_MARKER', ctx));
     let pos = -1;
     for (let k = 0; k <= i; k++) { pos = buf.indexOf(marker, pos + 1); if (pos < 0) return {}; }
     const out = {};
@@ -307,7 +307,7 @@ function decodeLog(ctx, fl, i, opt) {
         downsample: opt.rate ? { rateHz: opt.rate, mode: opt.mode || 'envelope' } : null,
         start_us: t0, end_us: t1, missingFields: missing,
         header: { ...sys, ...headerExtras(ctx, sys) },
-        rawHeader: rawHeader(fl.rawBuffer, i),
+        rawHeader: rawHeader(ctx, fl.rawBuffer, i),
         stats: compactStats(fl.getStats()),
         events, gaps_us: gaps,
         inventory: inventory(names, full),
