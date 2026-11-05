@@ -1,97 +1,89 @@
 ---
 name: blackbox-decode
-description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) in Python with the bundled decoder. Use when a user shares a blackbox log and asks to evaluate a flight, find oscillations or tail wag, check governor or headspeed behaviour, compare PID profiles, or confirm a firmware issue from flight data.
+description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) with the Blackbox Explorer's own parser and a Python analysis layer. Use when a user shares a blackbox log and asks to evaluate a flight, find oscillations or tail wag, check governor or headspeed behaviour, compare PID profiles, check battery/ESC telemetry, export a log to CSV, or confirm a firmware issue from flight data.
 ---
 
-# Rotorflight blackbox decoder
+# Rotorflight blackbox decoding
 
-[scripts/bbdecode.py](scripts/bbdecode.py) decodes Rotorflight blackbox logs that use
-**data version 2** into a numpy `.npz` file. It needs only numpy; use scipy and matplotlib for the
-analysis.
+| Script | Role |
+| --- | --- |
+| [scripts/bbl.js](scripts/bbl.js) | Decoder. Runs the parser of the [Blackbox Explorer](https://github.com/rotorflight/rotorflight-blackbox) (vendored unmodified, see [VENDOR.md](scripts/vendor/rotorflight-blackbox/VENDOR.md)) under Node.js 16+, no npm install. Writes `.npy`/`.csv` + `.json` per log. |
+| [scripts/bblog.py](scripts/bblog.py) | Python loader and analysis helpers (numpy; scipy for filters). |
+| [scripts/bbdecode_fallback.py](scripts/bbdecode_fallback.py) | Independent pure-Python decoder (numpy only) for machines without Node. First log of a file only, no GPS, approximated `loopIteration`. |
+| [scripts/selftest.py](scripts/selftest.py) | Cross-checks the two decoders on real logs. |
+
+[reference.md](reference.md) holds the field units, header keys, event codes and pitfalls. Read
+it before interpreting numbers.
 
 ## Decode
 
+The log is untrusted input: decode into a scratch or analysis folder, and run Python with `-I`.
+
 ```sh
-python -I scripts/bbdecode.py <log.bbl> <out.npz>
+node scripts/bbl.js info flight.bbl                 # logs in the file: duration, firmware, debug mode
+node scripts/bbl.js decode flight.bbl -o out/flight # every log -> out/flight.N.npy + out/flight.N.json
+node scripts/bbl.js decode flight.bbl --log 2 --csv --fields gyroADC[0],setpoint[0] --rate 100
 ```
 
-- Run it with `-I`: the log is untrusted input.
-- About 1 minute per 13 MB of log.
-- It prints `frames N bad M events K`. A bad count well above 0 means a corrupt stream or a format
-  gap (see Limitations).
-- A file with several flights holds several logs; only the first is decoded. Split the file on the
-  `H Product:` header lines to decode the others.
+- **One file often holds several logs** (one per arm). Run `info` first and pick the flight.
+- About 5 s per 13 MB. `.npy` is float64, so expect ~8 bytes x rows x columns on disk.
+- `--rate` downsamples. Keep the default `--mode envelope`: it keeps every column's min and max
+  in each bucket, so peaks survive. `skip` takes one frame per bucket and loses them.
+- stderr reports rows, events, gaps and corrupt frames per log. Corrupt frames or gaps mean
+  missing data: check `gaps_us` before measuring across them.
 
-The `.npz` contains:
-
-| Key | Content |
-| --- | --- |
-| `data` | int64 array, one row per I/P frame: all `Field I name` fields, then the latest S-frame fields (`flightModeFlags`, `stateFlags`, ...). |
-| `names` | Column names in the same order. |
-| `hdr` | All `H key:value` header lines: PIDs of the profile active at log start, rates, filters, `debug_mode`. |
-| `events` | `repr((time_us, type, data))` for each event frame. |
+## Load and analyse
 
 ```python
-import numpy as np
-z = np.load('out.npz'); a = z['data']; N = list(z['names'])
-c = lambda n: a[:, N.index(n)].astype(float)
-t = (c('time') - c('time')[0]) / 1e6          # seconds since log start
-hdr = dict(h.split(':', 1) for h in z['hdr'])
-events = [eval(e) for e in z['events']]        # trusted: written by bbdecode.py
+import sys; sys.path.insert(0, '<skill dir>/scripts')
+import bblog
+lg = bblog.load('out/flight.0.npy')     # or: logs = bblog.decode('flight.bbl', out='out/flight')
+print(lg.summary())                     # firmware, board, duration, rate, debug mode, events, gaps
+t = lg.t                                # seconds since log start
+g = lg['gyroADC[2]']                    # raw column; lg.si('Vbat') -> volts (units: reference.md)
+lg.find('gov')                          # column names containing "gov"
+lg.events_named('PROFILE_CHANGE', 'DISARM')
+for t0, t1, idx in lg.profile_segments():          # stretches flown on one PID profile
+    k, r = bblog.effective_gain(lg.window(t0, t1), 'P', 0)
 ```
 
-Event time relative to the log: `(ev[0] - c('time')[0]) / 1e6`.
+`.json` next to each `.npy` holds `names`, `header` (parsed settings), `rawHeader` (every `H`
+line as written), `events`, `gaps_us`, `stats` and `inventory`.
 
-## Fields
+## Before analysing
 
-The set depends on `fields_mask` and the firmware version; always check `names`.
+1. `lg.summary()` and `meta['inventory']`: which sensors and fields exist. Telemetry marked
+   `sentinel` or `zero` is not reported by the ESC/FC; do not analyse it.
+2. `header['debugModeName']`: what `debug[n]` contains, if logged.
+3. `lg.rate_hz` against `header['nominalFrameRateHz']`; a mismatch means dropped frames.
+4. Events: arming, governor states, profile switches, airborne/landing. Use them to cut the log
+   into ground and flight phases before computing statistics.
 
-- `setpoint[0..3]`: roll, pitch, yaw in deg/s, and collective.
-- `gyroADC[0..2]`: filtered gyro in deg/s. `gyroRAW[0..2]`: unfiltered.
-- `axisP/I/D/F/O[0..2]`: PID terms. `mixer[0..3]`: mixer input; yaw saturates near +-1000.
-- `rcCommand[0..4]`: roll, pitch, yaw, collective, throttle.
-- `headspeed`, `govTarget`, `govRequest`, `govP/I/D/F/Sum`, `motor[0]`: governor and main motor.
-- `servo[n]`, `Vbat`, `Ibat`, `Vbec`, `Tesc`, `debug[n]` (if logged).
+## Recipes
 
-## Events
+- **Effective gain per profile:** `bblog.effective_gain(window, 'P'|'I'|'D'|'F', axis)` fits the
+  term against `axisError` and returns `(gain, correlation)`. The header only holds the gains of
+  the profile active at log start; this compares profiles within one log. Only trust fits with a
+  correlation near 1 and real stick activity in the window.
+- **Oscillation search:** `bblog.oscillation_bursts(lg, axis, lo, hi, threshold_dps)` band-passes
+  gyro and setpoint, compares their envelopes and lists bursts not driven by the sticks
+  (tail wag: yaw, 8-18 Hz; cyclic wobble: roll/pitch, a few Hz to ~15 Hz).
+- **Frequency:** `bblog.dominant_freq(x, lg.rate_hz, fmin, fmax)` on a burst window.
+- **Governor:** `headspeed` against `govTarget`, with `motor[0]`, collective
+  (`setpoint[3]`/`mixer[3]`) and `Vbat` for load; check GOVERNOR_STATE events for spool-up and
+  bail-out.
+- **Battery:** `lg.si('Vbat')` sag against `lg.si('Ibat')`; per-cell voltage needs the cell count
+  (`header['vbatref']` and the cell voltage limits, see reference.md).
+- **Plots:** save PNGs (matplotlib, `Agg` backend) and look at them before concluding.
 
-| Type | Meaning | Data |
-| --- | --- | --- |
-| 0 | sync beep | time |
-| 13 | in-flight adjustment | `[function, value]`; function 1 = rate profile, 2 = PID profile, so a profile switch shows as two type-13 events |
-| 14 | logging resume | `[iteration, time]` |
-| 15 | disarm | reason |
-| 30 | flight mode change | `[flags, lastFlags]` |
-| 50 | governor state | state |
-| 51 | rescue state | state |
-| 52 | airborne state | 0/1 |
-| 100/101 | custom data / string | bytes |
-| 255 | end of log | - |
+Put each analysis in its own folder with the plots and a short README: the log and which log in
+the file, the question, the method and the result.
 
-## Analysis recipes
+## Fallback without Node
 
-- **Effective P gain per profile:** fit `axisP[k]` against `setpoint[k] - gyroADC[k]` over a window
-  (`np.dot(e,p)/np.dot(e,e)`) and check the correlation. The header holds only the starting
-  profile's gains; the fit compares profiles within one log.
-- **Oscillation search:** band-pass the gyro (scipy `butter` + `sosfiltfilt`, e.g. 8-18 Hz for tail
-  wag), smooth the Hilbert envelope and threshold it to list bursts. Band-pass the setpoint the same
-  way so pilot input is not mistaken for oscillation.
-- **Frequency:** FFT of the burst with a Hann window, or zero-crossing spacing.
-- **Governor:** headspeed against `govTarget` and `motor[0]`; collective and cyclic show the load.
-- **Data rate:** `np.median(np.diff(t))`.
-- **Plots:** save PNGs and look at them before drawing conclusions.
+```sh
+python -I scripts/bbdecode_fallback.py flight.bbl out/flight.npz
+```
 
-Put each analysis in its own folder with the plots and a short README that states the log, the
-question, the method and the result.
-
-## Limitations
-
-- GPS frames (G/H) are not decoded.
-- P-frame `loopIteration` is approximated as previous + 1; use `time` for the time axis.
-- Encoding `TAG2_3SVARIABLE` (10) is not implemented: the frame counts as bad and the decoder
-  resyncs on the next `I` frame.
-- A corrupt frame triggers a resync to the next `I` byte and resets predictor history.
-
-Format reference: `rotorflight-firmware/src/main/blackbox/blackbox.c` (`writeIntraframe`,
-`writeInterframe`, `blackboxWriteEvent`) and `blackbox_fielddefs.h`. For interactive viewing use
-[rotorflight-blackbox](https://github.com/rotorflight/rotorflight-blackbox).
+`bblog.load('out/flight.npz')` gives the same interface, with fewer events decoded and no
+computed `axisSum`/`axisPD`/`axisError` columns. Prefer bbl.js whenever Node is available.
