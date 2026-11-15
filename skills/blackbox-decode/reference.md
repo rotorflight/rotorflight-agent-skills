@@ -112,4 +112,22 @@ is decoded with the 4.6 definitions: new fields still decode (names come from th
 enum names (debug modes, flight modes, governor states) can be wrong. Update the vendored parser
 when a newer Blackbox Explorer release exists (see VENDOR.md).
 
-GPS frames are read but not exported (the Explorer's parser does not use them either).
+## GPS
+
+The Explorer's parser reads GPS frames but its FlightLog drops them, so `bbl.js` runs the
+unmodified parser once more over each log with GPS frames and writes `PREFIX.N.gps.npy` (or
+`.gps.csv`), named in the log's `.json` under `gps`. One row per GPS frame (~10 Hz), `time` on
+the main clock:
+
+| Column | Unit | From the firmware's G frame |
+| --- | --- | --- |
+| `GPS_numSat` | | satellites |
+| `GPS_north_m`, `GPS_east_m` | m | position from the GPS home (H frame), flat-earth |
+| `GPS_altitude_m` | m | `altCm / 10` logged |
+| `GPS_speed_mps` | m/s | ground speed, logged in cm/s (`gps.h` says 0.1 m/s; the positions' rate of change agrees with cm/s) |
+| `GPS_course_deg` | deg | course over ground, logged in 0.1 deg |
+
+Frames before the GPS home is set are skipped (their coordinates are deltas from it).
+Absolute latitude and longitude (`GPS_lat_deg`, `GPS_lon_deg`) only with `--gps-absolute`:
+coordinates show where the pilot flies, so keep them out of shared files. `--no-gps` skips the
+pass. In Python, `lg.gps` returns the GPS frames as a `Log` with the same time zero.
