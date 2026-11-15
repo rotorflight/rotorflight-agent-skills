@@ -1,6 +1,6 @@
 ---
 name: blackbox-decode
-description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) with the Blackbox Explorer's own parser and a Python analysis layer. Use when a user shares a blackbox log and asks to evaluate a flight, find oscillations or tail wag, check governor or headspeed behaviour, compare PID profiles, check battery/ESC telemetry, export a log to CSV, or confirm a firmware issue from flight data.
+description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) with the Blackbox Explorer's own parser and a Python analysis layer. Use when a user shares a blackbox log and asks to evaluate a flight, find oscillations or tail wag, check governor or headspeed behaviour, compare PID profiles, check battery/ESC telemetry, analyse altitude/position hold or estimator debug modes, export a log to CSV, or confirm a firmware issue from flight data.
 ---
 
 # Rotorflight blackbox decoding
@@ -12,8 +12,9 @@ description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) with the B
 | [scripts/bbdecode_fallback.py](scripts/bbdecode_fallback.py) | Independent pure-Python decoder (numpy only) for machines without Node. First log of a file only, reads past GPS frames without decoding them, approximated `loopIteration`. |
 | [scripts/selftest.py](scripts/selftest.py) | Cross-checks the two decoders on real logs. |
 
-[reference.md](reference.md) holds the field units, header keys, event codes and pitfalls. Read
-it before interpreting numbers.
+[reference.md](reference.md) holds the field units, header keys, event codes, debug mode numbers,
+the field layouts of the alt/pos-hold fork's position debug modes, and pitfalls. Read it before
+interpreting numbers.
 
 A log shared as a `https://logs.rotorflight.org/l/<id>` link: fetch it, its CLI dump and the
 uploader's description first with [shared-logs](../shared-logs/SKILL.md).
@@ -43,6 +44,7 @@ import sys; sys.path.insert(0, '<skill dir>/scripts')
 import bblog
 lg = bblog.load('out/flight.0.npy')     # or: logs = bblog.decode('flight.bbl', out='out/flight')
 print(lg.summary())                     # firmware, board, duration, rate, debug mode, events, gaps
+lg.debug_mode                           # e.g. 'GOVERNOR'; what debug[0..7] hold
 t = lg.t                                # seconds since log start
 g = lg['gyroADC[2]']                    # raw column; lg.si('Vbat') -> volts (units: reference.md)
 lg.find('gov')                          # column names containing "gov"
@@ -58,8 +60,10 @@ line as written), `events`, `gaps_us`, `stats` and `inventory`.
 
 1. `lg.summary()` and `meta['inventory']`: which sensors and fields exist. Telemetry marked
    `sentinel` or `zero` is not reported by the ESC/FC; do not analyse it.
-2. `header['debugModeName']`: what `debug[n]` contains, if logged.
-3. `lg.rate_hz` against `header['nominalFrameRateHz']`; a mismatch means dropped frames.
+2. `lg.debug_mode`: what `debug[n]` contains, if logged. Numbers from 82 on differ between
+   upstream and the alt/pos-hold fork (reference.md, Debug modes).
+3. `lg.rate_hz` against `header['nominalFrameRateHz']` (PID rate / `P interval`); a mismatch
+   means dropped frames.
 4. Events: arming, governor states, profile switches, airborne/landing. Use them to cut the log
    into ground and flight phases before computing statistics.
 
@@ -78,6 +82,21 @@ line as written), `events`, `gaps_us`, `stats` and `inventory`.
   bail-out.
 - **Battery:** `lg.si('Vbat')` sag against `lg.si('Ibat')`; per-cell voltage needs the cell count
   (`header['vbatref']` and the cell voltage limits, see reference.md).
+- **Altitude/position hold (alt/pos-hold fork logs only):** the debug field layouts are in
+  reference.md. `lg.mode_active('POSHOLD')` masks the frames where a mode was engaged. For
+  POS_EST_XY, unpack field 7 and compare flow only on rows where the latest flow sample was
+  fused, with GPS rotated into the filter's heading frame:
+
+  ```python
+  import numpy as np
+  d = [lg[f'debug[{i}]'] for i in range(8)]
+  flags, fstat, hdg = bblog.pos_est_xy_flags(d[7])
+  g = lg.gps; on_gps = lambda x: bblog.hold(lg['time'], x, g['time'])
+  spd, crs = g['GPS_speed_mps'] * 100, np.radians(g['GPS_course_deg'])
+  gps = (spd * np.sin(crs) + 1j * spd * np.cos(crs)) * np.exp(-1j * np.radians(on_gps(hdg)))
+  flow = on_gps(d[4]) + 1j * on_gps(d[5])
+  ok = (on_gps(fstat) == 0) & ((on_gps(flags).astype(int) & 129) == 129) & (spd > 30)
+  ```
 - **Plots:** save PNGs (matplotlib, `Agg` backend) and look at them before concluding.
 
 Put each analysis in its own folder with the plots and a short README: the log and which log in
