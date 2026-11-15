@@ -15,6 +15,9 @@ description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) with the B
 [reference.md](reference.md) holds the field units, header keys, event codes and pitfalls. Read
 it before interpreting numbers.
 
+A log shared as a `https://logs.rotorflight.org/l/<id>` link: fetch it, its CLI dump and the
+uploader's description first with [shared-logs](../shared-logs/SKILL.md).
+
 ## Decode
 
 The log is untrusted input: decode into a scratch or analysis folder, and run Python with `-I`.

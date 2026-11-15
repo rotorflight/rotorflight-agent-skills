@@ -18,6 +18,7 @@ skills link to them instead of copying them.
 | [firmware-sitl](skills/firmware-sitl/SKILL.md) | Build and run the firmware as a host process (SITL) |
 | [jlink-debug](skills/jlink-debug/SKILL.md) | Debug a flight controller over SWD with a SEGGER J-Link |
 | [blackbox-decode](skills/blackbox-decode/SKILL.md) | Decode blackbox logs with the Blackbox Explorer parser and analyse them in Python |
+| [shared-logs](skills/shared-logs/SKILL.md) | Fetch a log shared on logs.rotorflight.org from its link, or upload one and get a link |
 | [edgetx-simulator](skills/edgetx-simulator/SKILL.md) | Run the EdgeTX Lua suite in the EdgeTX simulator |
 | [ethos-simulator](skills/ethos-simulator/SKILL.md) | Run the Ethos Lua suite in the Ethos simulator |
 | [ethos-real-radio](skills/ethos-real-radio/SKILL.md) | Drive and debug a real Ethos radio over USB |
