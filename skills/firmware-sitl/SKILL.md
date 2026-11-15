@@ -41,7 +41,7 @@ make TARGET=SITL           # -> obj/main/rotorflight_SITL.elf
 
 The packet structs are in `src/main/target/SITL/target.h`. Point the Configurator at
 `tcp://127.0.0.1:5761` (or 5762). A reboot (Save and Reboot, leaving the CLI, `MSP_REBOOT`) ends
-the process; start it with `src/utils/sitl/sitl-run.py <elf> --dir <rundir>` (#596) to have it
+the process; start it with `python3 src/utils/sitl/sitl-run.py <elf> --dir <rundir>` (#596) to have it
 come back on the same `eeprom.bin`. Without an FDM feeding packets the gyro reads zero and the FC
 will not arm.
 
@@ -56,7 +56,7 @@ will not arm.
   the Configurator's Blackbox tab, then decode it with the blackbox-decode skill.
 - `src/utils/sitl/scenarios.py` (#596) runs closed-loop scenarios with a ground-run rotor model:
   governor spool-up, PID profile switch, RX loss. Use it for governor and failsafe changes.
-- `src/utils/sitl/esc/esc_sim.py` (#596 follow-up) is a virtual OpenYGE or HobbyWing V5 ESC on a
+- `src/utils/sitl/esc/esc_sim.py` (#601) is a virtual OpenYGE or HobbyWing V5 ESC on a
   TCP UART, telemetry and the parameter dialogue; `esc_check.py` reads, checks telemetry and
   writes over MSP. Use it for ESC sensor and ESC programming changes.
 
@@ -66,11 +66,14 @@ will not arm.
 - Windows `nanosleep` below 1 ms returns at once; short delays are spun, so expect one busy core.
 - A store written by a different build is replaced with defaults on start.
 - Rotorflight keeps stage-2 failsafe off (`failsafeStartMonitoring()` is disabled): RX loss never
-  disarms; after 300 ms each channel takes its `rxfail` value. Test failsafe changes against that.
+  disarms; after 300 ms each channel applies its `rxfail` mode: `a` (auto, control channels only:
+  sticks and collective centred, throttle to `failsafe_throttle`), `h` (hold the last value) or `s`
+  (set the given value). Test failsafe changes against that.
 - A CLI session left without `exit` keeps the port in CLI mode: the next MSP client's frames are
   read as CLI input. `exit` reboots.
 - Loading a real board's CLI dump: drop board-specific lines (`resource`, `timer`, `dma`, `serial`,
-  `align_board_*`, `*_align*`, receiver and motor protocol settings). Sensor alignment in
+  `align_board_*`, `*_align*`, receiver and motor protocol settings), then set up again on the SITL
+  UARTs what the test needs (e.g. `serial` for an ESC telemetry port). Sensor alignment in
   particular inverts axes, since the FDM already delivers body-frame data.
 - The governor needs a fast rpm source: the SITL frequency sensor (FDM `motor_erpm[]`) or DShot
   telemetry. Serial ESC telemetry alone leaves `gov_mode = ELECTRIC` blocked (GOVERNOR, RPM_SIGNAL).
