@@ -41,9 +41,9 @@ make TARGET=SITL           # -> obj/main/rotorflight_SITL.elf
 
 The packet structs are in `src/main/target/SITL/target.h`. Point the Configurator at
 `tcp://127.0.0.1:5761` (or 5762). A reboot (Save and Reboot, leaving the CLI, `MSP_REBOOT`) ends
-the process; start it with `python3 src/utils/sitl/sitl-run.py <elf> --dir <rundir>` (#596) to have it
-come back on the same `eeprom.bin`: the one in `<rundir>` (default: the current directory). Without an FDM feeding packets the gyro reads zero and the FC
-will not arm.
+the process; start it with `python3 src/utils/sitl/sitl-run.py <elf> --dir <rundir>` (#596) to
+have it come back on the same `eeprom.bin`: the one in `<rundir>` (default: the current
+directory). Without an FDM feeding packets the gyro reads zero and the FC will not arm.
 
 ## Checking a change
 
@@ -66,9 +66,10 @@ will not arm.
 - Windows `nanosleep` below 1 ms returns at once; short delays are spun, so expect one busy core.
 - A store written by a different build is replaced with defaults on start.
 - Rotorflight keeps stage-2 failsafe off (`failsafeStartMonitoring()` is disabled): failsafe never
-  disarms on RX loss (stick arming with `auto_disarm_delay` can still disarm on the low throttle); after 300 ms each channel applies its `rxfail` mode: `a` (auto, control channels only:
-  sticks and collective centred, throttle to `failsafe_throttle`), `h` (hold the last value) or `s`
-  (set the given value). Test failsafe changes against that.
+  disarms on RX loss (stick arming with `auto_disarm_delay` can still disarm on the low throttle).
+  After 300 ms each channel applies its `rxfail` mode: `a` (auto, control channels only: sticks
+  and collective centred, throttle to `failsafe_throttle`), `h` (hold the last value) or `s` (set
+  the given value). Test failsafe changes against that.
 - A CLI session left without `exit` keeps the port in CLI mode: the next MSP client's frames are
   read as CLI input. `exit` reboots.
 - Loading a real board's CLI dump: drop board-specific lines (`resource`, `timer`, `dma`, `serial`,
