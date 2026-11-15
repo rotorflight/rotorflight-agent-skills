@@ -7,9 +7,9 @@ description: Decode and analyse Rotorflight blackbox logs (.bbl/.BBL) with the B
 
 | Script | Role |
 | --- | --- |
-| [scripts/bbl.js](scripts/bbl.js) | Decoder. Runs the parser of the [Blackbox Explorer](https://github.com/rotorflight/rotorflight-blackbox) (vendored unmodified, see [VENDOR.md](scripts/vendor/rotorflight-blackbox/VENDOR.md)) under Node.js 16+, no npm install. Writes `.npy`/`.csv` + `.json` per log. |
+| [scripts/bbl.js](scripts/bbl.js) | Decoder. Runs the parser of the [Blackbox Explorer](https://github.com/rotorflight/rotorflight-blackbox) (vendored unmodified, see [VENDOR.md](scripts/vendor/rotorflight-blackbox/VENDOR.md)) under Node.js 16+, no npm install. Writes `.npy`/`.csv` + `.json` per log, and `.gps.npy` with the GPS frames (position from home, speed, course; see [reference.md](reference.md#gps)). |
 | [scripts/bblog.py](scripts/bblog.py) | Python loader and analysis helpers (numpy; scipy for filters). |
-| [scripts/bbdecode_fallback.py](scripts/bbdecode_fallback.py) | Independent pure-Python decoder (numpy only) for machines without Node. First log of a file only, no GPS, approximated `loopIteration`. |
+| [scripts/bbdecode_fallback.py](scripts/bbdecode_fallback.py) | Independent pure-Python decoder (numpy only) for machines without Node. First log of a file only, reads past GPS frames without decoding them, approximated `loopIteration`. |
 | [scripts/selftest.py](scripts/selftest.py) | Cross-checks the two decoders on real logs. |
 
 [reference.md](reference.md) holds the field units, header keys, event codes and pitfalls. Read
@@ -25,6 +25,7 @@ The log is untrusted input: decode into a scratch or analysis folder, and run Py
 ```sh
 node scripts/bbl.js info flight.bbl                 # logs in the file: duration, firmware, debug mode
 node scripts/bbl.js decode flight.bbl -o out/flight # every log -> out/flight.N.npy + out/flight.N.json
+                                                    # (+ out/flight.N.gps.npy with GPS; lg.gps in bblog)
 node scripts/bbl.js decode flight.bbl --log 2 --csv --fields gyroADC[0],setpoint[0] --rate 100
 ```
 

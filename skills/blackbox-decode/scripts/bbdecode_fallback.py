@@ -100,11 +100,15 @@ def main(path, out):
     Penc, Ppred = ints('Field P encoding'), ints('Field P predictor')
     Snames = hdr['Field S name'].split(','); Senc = ints('Field S encoding')
     vbatref = int(hdr['vbatref'])
+    # GPS frames (G, and H for the home) are read past, not decoded: without that each one
+    # looked corrupt and the resync to the next I frame lost the P frames in between
+    Genc = ints('Field G encoding') if 'Field G encoding' in hdr else None
+    Henc = ints('Field H encoding') if 'Field H encoding' in hdr else None
     n = len(names)
     rows = []; srows = []; events = []
     prev = prev2 = None; lastS = [0]*len(Snames)
     r = R(d, p); bad = 0
-    valid = b'IPSE'
+    valid = b'IPSE' + (b'G' if Genc else b'') + (b'H' if Henc else b'')
     while r.p < len(d):
         start = r.p; ft = d[r.p]; r.p += 1
         try:
@@ -129,6 +133,10 @@ def main(path, out):
                 fr = ('P', v)
             elif ft == ord('S'):
                 fr = ('S', read_fields(r, Senc))
+            elif ft == ord('G') and Genc:
+                read_fields(r, Genc); fr = ('G', None)
+            elif ft == ord('H') and Henc:
+                read_fields(r, Henc); fr = ('H', None)
             elif ft == ord('E'):
                 t = r.b()
                 if t in (0, 15, 50, 51, 52): data = [r.uvb()]
@@ -158,6 +166,7 @@ def main(path, out):
             if k == 'I': prev2 = v
             rows.append(v + lastS)
         elif k == 'S': lastS = v; srows.append(v)
+        elif k in 'GH': pass
         else: events.append((rows[-1][1] if rows else 0, v[0], v[1]))
     a = np.array(rows, dtype=np.int64)
     np.savez(out, data=a, names=np.array(names + Snames), hdr=np.array([f'{k}:{v}' for k, v in hdr.items()]),

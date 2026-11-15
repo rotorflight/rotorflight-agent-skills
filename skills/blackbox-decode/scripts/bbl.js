@@ -13,10 +13,13 @@
  *   --mode envelope|skip downsampling: keep each column's min and max per bucket (envelope,
  *                        default) or one frame per bucket (skip)
  *   --csv                write CSV instead of .npy
+ *   --no-gps             skip the GPS frames
+ *   --gps-absolute       also write absolute latitude/longitude (default: metres from home)
  *
  * Output per log N: PREFIX.N.npy (float64, one row per main frame, NaN where a value is
  * missing) or PREFIX.N.csv, and PREFIX.N.json (column names, header, events, gaps, stats,
  * sensor inventory). Load them with bblog.py.
+ * A log with GPS frames also gets PREFIX.N.gps.npy (.csv): one row per GPS frame, see decodeGps.
  *
  * Needs only Node.js 16+. The parser in vendor/rotorflight-blackbox is used unmodified.
  */
@@ -315,6 +318,46 @@ function decodeLog(ctx, fl, i, opt) {
     return { meta, cols, sel };
 }
 
+// GPS frames. The Explorer's FlightLog drops them ("pending to do something with GPS frames"),
+// so a second pass of the unmodified parser over log i collects them. Columns: time (us, the
+// main clock), numSat, position north/east of the GPS home (m), altitude (m), ground speed
+// (m/s), course (deg). Absolute latitude/longitude (deg) only with absolute = true: a flight's
+// coordinates are where its pilot flies, keep them out of shared files.
+const GPS_NAMES = ['time', 'GPS_numSat', 'GPS_north_m', 'GPS_east_m', 'GPS_altitude_m', 'GPS_speed_mps', 'GPS_course_deg'];
+const EARTH_R = 6371000;
+
+function decodeGps(ctx, fl, i, absolute) {
+    const data = new (vm.runInContext('Uint8Array', ctx))(fl.rawBuffer.buffer, fl.rawBuffer.byteOffset, fl.rawBuffer.byteLength);
+    const index = new (vm.runInContext('FlightLogIndex', ctx))(data);
+    const parser = new (vm.runInContext('FlightLogParser', ctx))(data);
+    parser.parseHeader(index.getLogBeginOffset(i), index.getLogBeginOffset(i + 1));
+    const G = parser.frameDefs.G, H = parser.frameDefs.H;
+    if (!G || !H) return null;
+    const gi = (n) => G.nameToIndex[n];
+    const k = { t: gi('time'), sat: gi('GPS_numSat'), lat: gi('GPS_coord[0]'), lon: gi('GPS_coord[1]'),
+                alt: gi('GPS_altitude'), spd: gi('GPS_speed'), crs: gi('GPS_ground_course') };
+    let home = null;
+    const rows = [];
+    parser.onFrameReady = (valid, frame, type) => {
+        if (type === 'H' && valid) home = [frame[H.nameToIndex['GPS_home[0]']], frame[H.nameToIndex['GPS_home[1]']]];
+        if (type !== 'G' || !valid || !home) return;            // coordinates are deltas from home
+        const lat = frame[k.lat] / 1e7, lon = frame[k.lon] / 1e7;
+        const lat0 = home[0] / 1e7, lon0 = home[1] / 1e7;
+        const north = (lat - lat0) * Math.PI / 180 * EARTH_R;
+        const east = (lon - lon0) * Math.PI / 180 * EARTH_R * Math.cos(lat0 * Math.PI / 180);
+        // altitude: dm (altCm / 10); speed: cm/s, as every GPS driver fills gpsSol.groundSpeed
+        // (gps.h says 0.1 m/s; logged speed against the positions' rate of change is 1:100)
+        const row = [frame[k.t], frame[k.sat], north, east, frame[k.alt] / 10, frame[k.spd] / 100, frame[k.crs] / 10];
+        if (absolute) row.push(lat, lon);
+        rows.push(row);
+    };
+    parser.resetDataState();
+    parser.parseLogData(false);
+    const names = absolute ? GPS_NAMES.concat(['GPS_lat_deg', 'GPS_lon_deg']) : GPS_NAMES.slice();
+    const cols = names.map((_, c) => Float64Array.from(rows, (r) => r[c]));
+    return { names, cols };
+}
+
 // Growable float64 column
 class Column {
     constructor() { this.a = new Float64Array(65536); this.n = 0; }
@@ -382,6 +425,8 @@ function parseArgs(argv) {
         else if (a === '--rate') opt.rate = +v();
         else if (a === '--mode') opt.mode = v();
         else if (a === '--csv') opt.csv = true;
+        else if (a === '--no-gps') opt.gps = false;
+        else if (a === '--gps-absolute') opt.gpsAbsolute = true;
         else if (a === '-v' || a === '--verbose') opt.verbose = true;
         else throw new Error(`unknown option ${a}`);
     }
@@ -412,6 +457,15 @@ function main() {
         const { meta, cols, sel } = decodeLog(ctx, fl, i, opt);
         const base = `${prefix}.${i}`;
         if (opt.csv) writeCsv(`${base}.csv`, meta.names, cols, sel); else writeNpy(`${base}.npy`, cols, sel);
+        const gps = opt.gps === false ? null : decodeGps(ctx, fl, i, opt.gpsAbsolute);
+        meta.gps = null;
+        if (gps && gps.cols[0].length) {
+            const ext = opt.csv ? 'csv' : 'npy';
+            if (opt.csv) writeCsv(`${base}.gps.csv`, gps.names, gps.cols, null); else writeNpy(`${base}.gps.npy`, gps.cols, null);
+            meta.gps = { file: path.basename(`${base}.gps.${ext}`), names: gps.names, rows: gps.cols[0].length,
+                         position: opt.gpsAbsolute ? 'from GPS home, and absolute' : 'from GPS home only' };
+            console.error(`log ${i}: ${gps.cols[0].length} GPS frames -> ${base}.gps.${ext}`);
+        }
         fs.writeFileSync(`${base}.json`, JSON.stringify(meta, null, 1));
         const st = meta.stats || {};
         console.error(`log ${i}: ${meta.rows} rows x ${meta.names.length} cols, ${((meta.end_us - meta.start_us) / 1e6).toFixed(1)} s, ` +

@@ -93,6 +93,24 @@ class Log:
     def events_named(self, *names):
         return [e for e in self.events if e['name'] in names]
 
+    @property
+    def gps(self):
+        """The GPS frames (PREFIX.N.gps.npy from bbl.js) as a Log with the same time zero:
+        GPS_numSat, GPS_north_m / GPS_east_m from the GPS home, GPS_altitude_m,
+        GPS_speed_mps, GPS_course_deg (~10 Hz). None without GPS. Not cut by window()."""
+        g = self.meta.get('gps')
+        if not g or not self.path:
+            return None
+        if getattr(self, '_gps', None) is None:
+            f = os.path.join(os.path.dirname(os.path.abspath(self.path)), g['file'])
+            if f.endswith('.npy'):
+                data = np.load(f)
+            else:
+                data = np.genfromtxt(f, delimiter=',', skip_header=1, ndmin=2)
+            self._gps = Log(data, g['names'], {'start_us': self.meta.get('start_us'),
+                                               'source': self.meta.get('source')}, f)
+        return self._gps
+
     # -- slicing -------------------------------------------------------------------------------
     def window(self, t0, t1):
         """Rows with t0 <= t < t1 (seconds since log start), as a new Log sharing meta."""
