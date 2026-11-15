@@ -147,13 +147,35 @@ function describeEvent(ctx, names, ev) {
 // ---------------------------------------------------------------------------------------------
 // Header extras that analyses keep needing
 
-function headerExtras(ctx, sys) {
+// debug_mode numbers the vendored parser's RF 4.6 table names wrongly or not at all
+// (src/main/build/debug.h). 81 is GYRO_CALIBRATION since 4.6.0 (the parser says USER1); 82 is
+// FBUS on upstream master (4.7). The NightHawk32 alt/pos-hold fork (feature/microlink-alt-pos-hold)
+// appends its own modes from 82 on instead; its logs have a position_source header line, which
+// upstream does not write.
+const DEBUG_MODE_FIXES = { 81: 'GYRO_CALIBRATION', 82: 'FBUS' };
+const DEBUG_MODE_FORK = { 82: 'ALTHOLD', 83: 'POSHOLD', 84: 'HARDDECK', 85: 'OPTICAL_FLOW',
+                          86: 'POS_EST_Z', 87: 'POS_EST_XY', 88: 'POS_EST_TERRAIN' };
+
+function debugModeName(ctx, sys, raw) {
+    const n = +sys.debug_mode;
+    if (sys.firmwareType == 5 && semver.gte(sys.firmwareVersion, '4.6.0')) {
+        const fork = raw && raw.position_source !== undefined;
+        const table = { ...DEBUG_MODE_FIXES, ...(fork ? DEBUG_MODE_FORK : {}) };
+        if (table[n]) return table[n];
+    }
+    return lookup(ctx, 'DEBUG_MODE', n);
+}
+
+function headerExtras(ctx, sys, raw) {
     const looptime = +sys.looptime || 0;               // gyro sample period, us
     const pidDenom = +sys.pid_process_denom || 1;
+    // "P interval": Rotorflight writes a plain N (one main frame every N PID loops, with
+    // "P ratio" = I interval / N), which the parser stores as 1/N; older logs write "num/denom"
     const pNum = +sys.frameIntervalPNum || 1, pDenom = +sys.frameIntervalPDenom || 1;
     return {
         firmwareTypeName: { 1: 'Baseflight', 2: 'Cleanflight', 3: 'Betaflight', 4: 'INAV', 5: 'Rotorflight' }[sys.firmwareType] || 'Unknown',
-        debugModeName: lookup(ctx, 'DEBUG_MODE', +sys.debug_mode),
+        debugModeName: debugModeName(ctx, sys, raw),
+        pidRateHz: looptime ? 1e6 / (looptime * pidDenom) : null,
         // nominal main-frame rate; check it against the decoded time column
         nominalFrameRateHz: looptime ? 1e6 / (looptime * pidDenom) * pNum / pDenom : null,
     };
@@ -226,7 +248,7 @@ function logSummary(ctx, fl, i) {
         log: i, start_us: t0, end_us: t1, duration_s: (t1 - t0) / 1e6,
         craft: sys['Craft name'] || null, firmware: sys['Firmware revision'] || null,
         board: sys['Board information'] || null, logStart: sys['Log start datetime'] || null,
-        fields: fl.getMainFieldNames().length, ...headerExtras(ctx, sys),
+        fields: fl.getMainFieldNames().length, ...headerExtras(ctx, sys, rawHeader(ctx, fl.rawBuffer, i)),
     };
 }
 
@@ -304,13 +326,14 @@ function decodeLog(ctx, fl, i, opt) {
     }
 
     const sys = fl.getSysConfig();
+    const raw = rawHeader(ctx, fl.rawBuffer, i);
     const meta = {
         tool: `bbl.js ${TOOL_VERSION}`, parser: VENDOR_TAG, source: path.basename(opt.file), log: i,
         logCount: fl.getLogCount(), names: outNames, rows: sel ? sel.length : nRows, framesDecoded: nRows,
         downsample: opt.rate ? { rateHz: opt.rate, mode: opt.mode || 'envelope' } : null,
         start_us: t0, end_us: t1, missingFields: missing,
-        header: { ...sys, ...headerExtras(ctx, sys) },
-        rawHeader: rawHeader(ctx, fl.rawBuffer, i),
+        header: { ...sys, ...headerExtras(ctx, sys, raw) },
+        rawHeader: raw,
         stats: compactStats(fl.getStats()),
         events, gaps_us: gaps,
         inventory: inventory(names, full),

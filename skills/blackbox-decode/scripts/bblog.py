@@ -13,6 +13,7 @@ Needs numpy; scipy for the filters.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ UNITS = {
     'Vbat': (0.01, 'V'), 'Vbec': (0.01, 'V'), 'Vbus': (0.01, 'V'), 'EscV': (0.01, 'V'), 'BecV': (0.01, 'V'),
     'Ibat': (0.01, 'A'), 'EscI': (0.01, 'A'), 'BecI': (0.01, 'A'),
     'Tesc': (1, 'degC'), 'Tmcu': (1, 'degC'), 'Tbec': (1, 'degC'),
-    'altitude': (0.01, 'm'), 'headspeed': (1, 'rpm'), 'tailspeed': (1, 'rpm'),
+    'altitude': (0.01, 'm'), 'vario': (0.01, 'm/s'), 'headspeed': (1, 'rpm'), 'tailspeed': (1, 'rpm'),
     'attitude[0]': (0.1, 'deg'), 'attitude[1]': (0.1, 'deg'), 'attitude[2]': (0.1, 'deg'),
     'setpoint[3]': (0.012, 'deg'), 'mixer[0]': (0.012, 'deg'), 'mixer[1]': (0.012, 'deg'),
     'mixer[2]': (0.024, 'deg'), 'mixer[3]': (0.1, '%'),
@@ -41,6 +42,21 @@ for _i in range(3):
     UNITS[f'setpoint[{_i}]'] = (1, 'deg/s')
 for _i in range(8):
     UNITS[f'servo[{_i}]'] = (1, 'us')
+
+# debug_mode numbers newer than the parser's table (bbl.js applies the same in debugModeName;
+# here for the fallback decoder's .npz). 82 is FBUS upstream (4.7) but ALTHOLD in the
+# NightHawk32 alt/pos-hold fork, whose logs have a position_source header line.
+DEBUG_MODE_FIXES = {81: 'GYRO_CALIBRATION', 82: 'FBUS'}
+DEBUG_MODE_FORK = {82: 'ALTHOLD', 83: 'POSHOLD', 84: 'HARDDECK', 85: 'OPTICAL_FLOW',
+                   86: 'POS_EST_Z', 87: 'POS_EST_XY', 88: 'POS_EST_TERRAIN'}
+
+# Fork only: bits of the activeFlightModes slow field (flightModeFlags_e, the modes engaged,
+# not the switch boxes). Bits 0-6 are the same flags upstream, but upstream does not log them.
+ACTIVE_MODE_BITS = {'FAILSAFE': 0, 'ANGLE': 1, 'HORIZON': 2, 'TRAINER': 3, 'ALTHOLD': 4,
+                    'RESCUE': 5, 'GPS_RESCUE': 6, 'POSHOLD': 7, 'HARDDECK': 8}
+
+# Fork only: OPTICAL_FLOW debug[7] and POS_EST_XY debug[7] bits 8-15
+FLOW_STATUS = ['fused', 'disabled', 'no sensor', 'no AGL', 'low quality', 'tilt', 'outlier']
 
 
 class Log:
@@ -92,6 +108,31 @@ class Log:
 
     def events_named(self, *names):
         return [e for e in self.events if e['name'] in names]
+
+    @property
+    def debug_mode(self):
+        """debug_mode name, '#N' when unknown, None when not in the header."""
+        h = self.header
+        if h.get('debugModeName'):
+            return h['debugModeName']
+        n = h.get('debug_mode')
+        if n is None:
+            return None
+        n = int(n)
+        raw = self.meta.get('rawHeader', h)
+        ver = re.search(r'Rotorflight (\d+)\.(\d+)', raw.get('Firmware revision', ''))
+        table = {}
+        if ver and tuple(map(int, ver.groups())) >= (4, 6):
+            table = {**DEBUG_MODE_FIXES, **(DEBUG_MODE_FORK if 'position_source' in raw else {})}
+        return table.get(n, f'#{n}')
+
+    def mode_active(self, name):
+        """Mask of frames with flight mode name engaged, from activeFlightModes (fork only;
+        None without that field). Names: ACTIVE_MODE_BITS."""
+        if 'activeFlightModes' not in self:
+            return None
+        f = np.nan_to_num(self['activeFlightModes']).astype(np.int64)
+        return (f >> ACTIVE_MODE_BITS[name]) & 1 == 1
 
     @property
     def gps(self):
@@ -148,7 +189,7 @@ class Log:
             'firmware': h.get('Firmware revision'), 'board': h.get('Board information'),
             'craft': h.get('Craft name'), 'duration_s': round(float(self.t[-1]), 1),
             'rate_hz': round(float(self.rate_hz), 1), 'rows': len(self.data),
-            'debug_mode': h.get('debugModeName'), 'events': len(self.events),
+            'debug_mode': self.debug_mode, 'events': len(self.events),
             'gaps': len(self.meta.get('gaps_us', [])),
         }
 
@@ -190,6 +231,32 @@ def decode(bbl, out=None, log='all', node=None, extra=()):
                                      check=True, capture_output=True, text=True).stdout)
     idx = [l['log'] for l in info['logs'] if 'error' not in l] if log == 'all' else [int(log)]
     return [load(f'{prefix}.{i}.npy') for i in idx if os.path.exists(f'{prefix}.{i}.json')]
+
+
+def hold(t_src, x, t):
+    """x (sampled at t_src) at times t, holding the last sample: put main-frame fields on the
+    GPS frames' times or the other way round. NaN before the first sample."""
+    t_src, x, t = np.asarray(t_src), np.asarray(x, dtype=float), np.asarray(t)
+    i = np.searchsorted(t_src, t, side='right') - 1
+    out = x[np.clip(i, 0, len(x) - 1)]
+    return np.where(i >= 0, out, np.nan)
+
+
+def pos_est_xy_flags(v):
+    """Unpack POS_EST_XY debug[7] (fork only): (flags, flow_status, heading_offset_deg).
+    flags bits 0-7: 1 valid, 2 GPS position fused < 2 s, 4 flow fused < 500 ms, 8 dead-reckoning
+    clamp, 16 GPS origin set, 32 GPS velocity fused alongside flow, 64 GPS held off (heading
+    not referenced to North), 128 heading aligned from flow vs GPS. flow_status: FLOW_STATUS
+    index of the latest sample. heading_offset_deg: heading frame -> North, valid with 128."""
+    v = np.nan_to_num(np.asarray(v)).astype(np.int64)
+    return v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0x1FF
+
+
+def pos_est_z_flags(v):
+    """Unpack POS_EST_Z debug[7] (fork only): (flags, disturbance). flags: 1 anchor fresh,
+    2 inverted thrust bias active, 4 last baro sample rejected by the 5 sigma gate, 8 baro."""
+    v = np.nan_to_num(np.asarray(v)).astype(np.int64)
+    return v // 1000, (v % 1000) / 100
 
 
 def _literal(s):
