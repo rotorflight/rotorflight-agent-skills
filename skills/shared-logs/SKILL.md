@@ -8,8 +8,11 @@ description: Fetch and upload blackbox logs shared on logs.rotorflight.org (or l
 [logs.rotorflight.org](https://logs.rotorflight.org) shares a blackbox log under one link,
 `https://logs.rotorflight.org/l/<id>`, together with what the uploader says it shows, the model,
 setup notes, an optional CLI dump, video and GitHub issue, pull request or branch. Logs are deleted
-after 1 day to 3 weeks. The site documents its API at [/api](https://logs.rotorflight.org/api).
-Wingflight's site, logs.wingflight.org, works the same way.
+after 1 day to 3 weeks. The site documents its API at [/api](https://logs.rotorflight.org/api),
+and describes it in OpenAPI 3.1 at
+[/api/openapi.json](https://logs.rotorflight.org/api/openapi.json) (field limits, error types),
+for generating a client or importing into Postman or Bruno. Wingflight's site,
+logs.wingflight.org, works the same way.
 
 ## Fetch a shared log
 
@@ -72,7 +75,7 @@ signing in with GitHub (*API tokens*, shown once). Read it from the environment,
 `ROTORFLIGHT_LOGS_TOKEN`. Never write it into a file, a commit or a message.
 
 ```sh
-curl -sf -H "Authorization: Bearer $ROTORFLIGHT_LOGS_TOKEN" \
+curl -s --fail-with-body -H "Authorization: Bearer $ROTORFLIGHT_LOGS_TOKEN" \
      -F file=@LOG00001.BBL \
      -F "description=Tail wag in fast forward flight, around 1:20" \
      -F "model=OXY 5" \
@@ -87,7 +90,13 @@ curl -sf -H "Authorization: Bearer $ROTORFLIGHT_LOGS_TOKEN" \
   and `days` (1, 3, 7, 14 or 21; default 7).
 - The answer is `201` with the same JSON as above. Share its `url`.
 - The site checks that the file is a blackbox log and enforces limits: 30 MB per log, 300 MB per
-  user, 30 uploads a day. Errors come back as `{"error": "..."}` with a 4xx status.
+  user, 30 uploads a day.
+- Errors are Problem Details (RFC 9457, `application/problem+json`):
+  `{"type": "https://logs.rotorflight.org/api#invalid-upload", "title": "...", "status": 400, "detail": "..."}`.
+  `type` names the kind (`invalid-upload`, `unauthorized`, `forbidden`, `not-found`,
+  `too-large`, `too-many-uploads`, `storage-full`, `server-error`; generic HTTP errors are
+  `about:blank`), and `detail` says what to fix. Show the user `detail`. `--fail-with-body`
+  (curl 7.76+) keeps it; `-f` throws it away.
 - `GET /api/v1/logs` lists the token owner's logs. `DELETE /api/v1/logs/<id>` deletes one now
   (answers 204).
 - Uploading shares the log, its CLI dump and the text with anyone who has the link. Ask the user
